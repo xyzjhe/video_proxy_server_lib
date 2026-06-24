@@ -1,5 +1,6 @@
 package main
 
+import "C"
 import (
 	_ "bytes"
 	"context"
