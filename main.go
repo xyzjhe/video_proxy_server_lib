@@ -48,8 +48,8 @@ func main() {
 
 }
 
-//export startServer
-func startServer() {
+//export StartServer
+func StartServer() {
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprintf(w, "ser200")
 	})
