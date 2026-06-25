@@ -48,8 +48,8 @@ func main() {
 
 }
 
-//export StartServer
-func StartServer() {
+//export Java_com_github_catvod_utils_LuProxyNative_StartServer
+func Java_com_github_catvod_utils_LuProxyNative_StartServer() {
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprintf(w, "ser200")
 	})
