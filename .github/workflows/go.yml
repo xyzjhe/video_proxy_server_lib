@@ -18,12 +18,11 @@ jobs:
         include:
           # Linux 平台
           - { goos: linux, goarch: amd64, cgo: 1 }
-          - { goos: linux, goarch: arm64, cgo: 1 }
-          - { goos: linux, goarch: arm, cgo: 1, goarm: 7 }
+
 
           # Windows 平台
           - { goos: windows, goarch: amd64, cgo: 1 }
-          - { goos: windows, goarch: arm64, cgo: 1 }
+
           # Android 平台 (必须开启 CGO 并配置 NDK)
           - { goos: android, goarch: arm, cgo: 1, ndk_arch: arm-linux-androideabi, api: 26 }
           - { goos: android, goarch: arm64, cgo: 1, ndk_arch: aarch64-linux-android, api: 26 }
@@ -44,8 +43,6 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y \
             gcc-mingw-w64-x86-64 \
-            gcc-aarch64-linux-gnu \
-            gcc-arm-linux-gnueabihf
 
       # 仅在需要 Android NDK 时才安装（节省其他矩阵的运行时间）
       - name: Set up Android NDK
