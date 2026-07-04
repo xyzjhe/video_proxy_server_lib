@@ -69,7 +69,7 @@ var (
 )
 
 func main() {
-	Java_com_github_catvod_spider_LuProxyNative_StartServer()
+	//Java_com_github_catvod_spider_LuProxyNative_StartServer()
 }
 
 //export Java_com_github_catvod_spider_LuProxyNative_StartServer
