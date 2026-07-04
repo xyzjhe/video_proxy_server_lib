@@ -44,8 +44,32 @@ func findAvailablePort(port int) int {
 	}
 }
 
-func main() {
+var (
+	rangeRegexp        = regexp.MustCompile(`bytes=(\d+)-(\d*)`)
+	contentRangeRegexp = regexp.MustCompile(`bytes \d+-\d+/(\d+)`)
 
+	// 初始化全局 http.Client
+	// 配置高并发流媒体场景下的专属连接池参数
+	globalClient = &http.Client{
+		Transport: &http.Transport{
+			Proxy: http.ProxyFromEnvironment,
+			DialContext: (&net.Dialer{
+				Timeout:   10 * time.Second, // 连接超时
+				KeepAlive: 30 * time.Second, // 保活时间
+			}).DialContext,
+			MaxIdleConns:          100,              // 全局最大空闲连接数
+			MaxIdleConnsPerHost:   32,               // 每个域名最大空闲连接数（多线程点播核心调优）
+			IdleConnTimeout:       90 * time.Second, // 空闲连接超时释放
+			TLSHandshakeTimeout:   5 * time.Second,  // TLS 握手超时
+			ExpectContinueTimeout: 1 * time.Second,
+			DisableKeepAlives:     false, // 必须开启 Keep-Alive 才能复用连接
+		},
+		Timeout: 30 * time.Second, // 单次分片下载总超时
+	}
+)
+
+func main() {
+	Java_com_github_catvod_spider_LuProxyNative_StartServer()
 }
 
 //export Java_com_github_catvod_spider_LuProxyNative_StartServer
@@ -194,7 +218,10 @@ func proxyAsync(url string, headers map[string]string, req *http.Request, w http
 			currentStart = chunkEnd + 1
 			launched++
 		}
-
+		flusher, ok := w.(http.Flusher)
+		if !ok {
+			log.Printf("w 不支持 Flusher 接口")
+		}
 		// 只接收实际启动的 goroutine 数量的数据
 		for i := 0; i < launched; i++ {
 			data, ok := <-channels[i]
@@ -203,6 +230,7 @@ func proxyAsync(url string, headers map[string]string, req *http.Request, w http
 			}
 			if len(data) > 0 {
 				w.Write(data)
+				flusher.Flush()
 			}
 		}
 
@@ -264,7 +292,7 @@ func isValidVideoHeader(data []byte) bool {
 }
 
 func parseRangePoint(rangeHeader string) (int64, int64) {
-	re := regexp.MustCompile(`bytes=(\d+)-(\d*)`)
+	re := rangeRegexp
 	matches := re.FindStringSubmatch(rangeHeader)
 	if len(matches) < 2 {
 		return 0, -1
@@ -287,8 +315,7 @@ func getInfo(url string, headers map[string]string) (map[string]string, error) {
 	}
 	req.Header.Set("Range", "bytes=0-0") // 1MB
 
-	client := &http.Client{}
-	resp, err := client.Do(req)
+	resp, err := globalClient.Do(req)
 	if err != nil {
 		return nil, err
 	}
@@ -313,7 +340,7 @@ func getContentLength(info map[string]string) int64 {
 }
 func parseContentLengthFromRange(contentRange string) int64 {
 	// Content-Range 格式: bytes start-end/total
-	re := regexp.MustCompile(`bytes \d+-\d+/(\d+)`)
+	re := contentRangeRegexp
 	matches := re.FindStringSubmatch(contentRange)
 	if len(matches) >= 2 {
 		total, err := strconv.ParseInt(matches[1], 10, 64)
@@ -340,11 +367,7 @@ func getVideoStream(ctx context.Context, start, end int64, contentLength int64, 
 	}
 	req.Header.Set("Range", fmt.Sprintf("bytes=%d-%d", start, end))
 
-	// 设置超时时间，防止 Goroutine 永久卡死
-	client := &http.Client{
-		Timeout: 30 * time.Second,
-	}
-	resp, err := client.Do(req)
+	resp, err := globalClient.Do(req)
 	if err != nil {
 		log.Printf("请求视频出错: %v", err)
 		return // 修复：必须 return，防止后续 defer 空指针 Panic
