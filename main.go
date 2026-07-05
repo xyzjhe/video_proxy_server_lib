@@ -2,7 +2,6 @@ package main
 
 import "C"
 import (
-	_ "bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -12,7 +11,7 @@ import (
 	"net/http"
 	"regexp"
 	"strconv"
-	_ "strings"
+
 	"sync"
 	"time"
 )
