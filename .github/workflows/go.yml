@@ -11,26 +11,26 @@ permissions:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
         include:
           # Linux 平台
-          - { goos: linux, goarch: amd64, cgo: 1, zig_target: 'x86_64-linux-gnu' }
-          - { goos: linux, goarch: arm64, cgo: 1, zig_target: 'aarch64-linux-gnu' }
-          - { goos: linux, goarch: arm, cgo: 1, zig_target: 'arm-linux-gnueabihf' }
+          - { goos: linux, goarch: amd64, cgo: 1, zig_target: 'x86_64-linux-gnu', os: 'ubuntu-latest' }
+          - { goos: linux, goarch: arm64, cgo: 1, zig_target: 'aarch64-linux-gnu', os: 'ubuntu-latest' }
+          - { goos: linux, goarch: arm, cgo: 1, zig_target: 'arm-linux-gnueabihf', os: 'ubuntu-latest' }
 
           # Windows 平台
-          - { goos: windows, goarch: amd64, cgo: 1, zig_target: 'x86_64-windows-gnu' }
+          - { goos: windows, goarch: amd64, cgo: 1, zig_target: 'x86_64-windows-gnu', os: 'windows-latest' }
 
           # macOS 平台
-          - { goos: darwin, goarch: amd64, cgo: 1, zig_target: 'x86_64-macos' }
-          - { goos: darwin, goarch: arm64, cgo: 1, zig_target: 'aarch64-macos' }
+          - { goos: darwin, goarch: amd64, cgo: 1, zig_target: 'x86_64-macos', os: 'macos-latest' }
+          - { goos: darwin, goarch: arm64, cgo: 1, zig_target: 'aarch64-macos', os: 'macos-latest' }
 
           # Android 平台
-          - { goos: android, goarch: arm, cgo: 1, zig_target: 'arm-linux-androideabi', api: 26 }
-          - { goos: android, goarch: arm64, cgo: 1, zig_target: 'aarch64-linux-android', api: 26 }
+          - { goos: android, goarch: arm, cgo: 1, zig_target: 'arm-linux-androideabi${{ matrix.api }}-clang', api: 26, os: 'ubuntu-latest' }
+          - { goos: android, goarch: arm64, cgo: 1, zig_target: 'aarch64-linux-android${{ matrix.api }}-clang', api: 26, os: 'ubuntu-latest' }
 
     steps:
       - name: Checkout code
@@ -68,7 +68,7 @@ jobs:
           # 使用 Zig 作为 CC 进行交叉编译
           if [ "${{ matrix.goos }}" = "android" ]; then
             # Android 需要指定 API 级别
-            export CC="zig cc -target ${{ matrix.zig_target }}${{ matrix.api }} -v"
+            export CC="zig cc -target ${{ matrix.zig_target }} -v"
           else
             export CC="zig cc -target ${{ matrix.zig_target }} -v"
           fi
@@ -83,15 +83,12 @@ jobs:
           EXT=""
           if [ "${{ matrix.goos }}" = "windows" ]; then
             EXT=".dll"
+            zip "${NAME}.zip" "${NAME}${EXT}"
           elif [ "${{ matrix.goos }}" = "darwin" ]; then
             EXT=".dylib"
-          else
-            EXT=".so"
-          fi
-
-          if [ "${{ matrix.goos }}" = "windows" ]; then
             zip "${NAME}.zip" "${NAME}${EXT}"
           else
+            EXT=".so"
             tar czf "${NAME}.tar.gz" "${NAME}${EXT}"
           fi
 
