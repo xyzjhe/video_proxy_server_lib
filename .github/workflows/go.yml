@@ -29,8 +29,8 @@ jobs:
           - { goos: darwin, goarch: arm64, cgo: 1, zig_target: 'aarch64-macos', os: 'macos-latest' }
 
           # Android 平台
-          - { goos: android, goarch: arm, cgo: 1, zig_target: 'arm-linux-androideabi${{ matrix.api }}-clang', api: 26, os: 'ubuntu-latest' }
-          - { goos: android, goarch: arm64, cgo: 1, zig_target: 'aarch64-linux-android${{ matrix.api }}-clang', api: 26, os: 'ubuntu-latest' }
+          - { goos: android, goarch: arm, cgo: 1, zig_target: 'arm-linux-androideabi26-clang', api: 26, os: 'ubuntu-latest' }
+          - { goos: android, goarch: arm64, cgo: 1, zig_target: 'aarch64-linux-android26-clang', api: 26, os: 'ubuntu-latest' }
 
     steps:
       - name: Checkout code
