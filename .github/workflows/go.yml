@@ -13,19 +13,24 @@ jobs:
   build:
     runs-on: ubuntu-latest
     strategy:
-      fail-fast: false # 即使某一个平台失败，其他平台也继续构建
+      fail-fast: false
       matrix:
         include:
           # Linux 平台
-          - { goos: linux, goarch: amd64, cgo: 1 }
-
+          - { goos: linux, goarch: amd64, cgo: 1, zig_target: 'x86_64-linux-gnu' }
+          - { goos: linux, goarch: arm64, cgo: 1, zig_target: 'aarch64-linux-gnu' }
+          - { goos: linux, goarch: arm, cgo: 1, zig_target: 'arm-linux-gnueabihf' }
 
           # Windows 平台
-          - { goos: windows, goarch: amd64, cgo: 1 }
+          - { goos: windows, goarch: amd64, cgo: 1, zig_target: 'x86_64-windows-gnu' }
 
-          # Android 平台 (必须开启 CGO 并配置 NDK)
-          - { goos: android, goarch: arm, cgo: 1, ndk_arch: arm-linux-androideabi, api: 26 }
-          - { goos: android, goarch: arm64, cgo: 1, ndk_arch: aarch64-linux-android, api: 26 }
+          # macOS 平台
+          - { goos: darwin, goarch: amd64, cgo: 1, zig_target: 'x86_64-macos' }
+          - { goos: darwin, goarch: arm64, cgo: 1, zig_target: 'aarch64-macos' }
+
+          # Android 平台
+          - { goos: android, goarch: arm, cgo: 1, zig_target: 'arm-linux-androideabi', api: 26 }
+          - { goos: android, goarch: arm64, cgo: 1, zig_target: 'aarch64-linux-android', api: 26 }
 
     steps:
       - name: Checkout code
@@ -36,21 +41,12 @@ jobs:
         with:
           go-version: '1.22'
           cache: true
-      # 安装 Windows 交叉编译工具链
-      - name: Install MinGW-w64
-        if: matrix.goos == 'windows'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            gcc-mingw-w64-x86-64 \
 
-      # 仅在需要 Android NDK 时才安装（节省其他矩阵的运行时间）
-      - name: Set up Android NDK
-        if: matrix.goos == 'android'
-        uses: android-actions/setup-android@v3
+      # 安装 Zig（统一替代 MinGW / NDK / GCC 等工具链）
+      - name: Set up Zig
+        uses: goto-bus-stop/setup-zig@v2
         with:
-          # 安装指定的 NDK 版本
-          ndk-version: '26.1.10909125'
+          version: '0.13.0'
 
       - name: Build Binary
         env:
@@ -63,30 +59,23 @@ jobs:
           EXT=""
           if [ "${{ matrix.goos }}" = "windows" ]; then
             EXT=".dll"
-            export CC="x86_64-w64-mingw32-gcc"
+          elif [ "${{ matrix.goos }}" = "darwin" ]; then
+            EXT=".dylib"
           else
             EXT=".so"
           fi
-          
-          # 如果是 Android 平台，配置 NDK 交叉编译器环境
+
+          # 使用 Zig 作为 CC 进行交叉编译
           if [ "${{ matrix.goos }}" = "android" ]; then
-            # 针对不同架构，现代 NDK 的 Clang 文件名拼接规则不同
-            if [ "${{ matrix.goarch }}" = "arm" ]; then
-              # 32位 arm 使用 armv7a-linux-androideabi${API}-clang
-              export CC="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/armv7a-linux-androideabi${{ matrix.api }}-clang"
-            else
-              # 64位 arm64 使用 aarch64-linux-android${API}-clang
-              export CC="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/${{ matrix.ndk_arch }}${{ matrix.api }}-clang"
-            fi
-            echo "Using Android CC: $CC"
+            # Android 需要指定 API 级别
+            export CC="zig cc -target ${{ matrix.zig_target }}${{ matrix.api }} -v"
+          else
+            export CC="zig cc -target ${{ matrix.zig_target }} -v"
           fi
-          if [ "${{ matrix.goos }}" = "linux" ] && [ "${{ matrix.goarch }}" = "arm64" ]; then
-             export CC="aarch64-linux-gnu-gcc"
-          elif [ "${{ matrix.goos }}" = "linux" ] && [ "${{ matrix.goarch }}" = "arm" ]; then
-              export CC="arm-linux-gnueabihf-gcc"
-          fi
-          
-          go build -ldflags="-s -w" -buildmode=c-shared -o "${NAME}${EXT}"  .
+
+          echo "Using Zig CC: $CC"
+
+          go build -ldflags="-s -w" -buildmode=c-shared -o "${NAME}${EXT}" .
 
       - name: Compress Artifacts
         run: |
@@ -94,11 +83,12 @@ jobs:
           EXT=""
           if [ "${{ matrix.goos }}" = "windows" ]; then
             EXT=".dll"
+          elif [ "${{ matrix.goos }}" = "darwin" ]; then
+            EXT=".dylib"
           else
             EXT=".so"
           fi
-         
-          
+
           if [ "${{ matrix.goos }}" = "windows" ]; then
             zip "${NAME}.zip" "${NAME}${EXT}"
           else
