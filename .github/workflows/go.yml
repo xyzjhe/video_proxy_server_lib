@@ -11,26 +11,26 @@ permissions:
 
 jobs:
   build:
-    runs-on: ${{ matrix.os }}
+    runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
         include:
           # Linux 平台
-          - { goos: linux, goarch: amd64, cgo: 1, zig_target: 'x86_64-linux-gnu', os: 'ubuntu-latest' }
-          - { goos: linux, goarch: arm64, cgo: 1, zig_target: 'aarch64-linux-gnu', os: 'ubuntu-latest' }
-          - { goos: linux, goarch: arm, cgo: 1, zig_target: 'arm-linux-gnueabihf', os: 'ubuntu-latest' }
+          - { goos: linux, goarch: amd64, cgo: 1, zig_target: 'x86_64-linux-gnu' }
+          - { goos: linux, goarch: arm64, cgo: 1, zig_target: 'aarch64-linux-gnu' }
+          - { goos: linux, goarch: arm, cgo: 1, zig_target: 'arm-linux-gnueabihf' }
 
           # Windows 平台
-          - { goos: windows, goarch: amd64, cgo: 1, zig_target: 'x86_64-windows-gnu', os: 'windows-latest' }
+          - { goos: windows, goarch: amd64, cgo: 1, zig_target: 'x86_64-windows-gnu' }
 
           # macOS 平台
-          - { goos: darwin, goarch: amd64, cgo: 1, zig_target: 'x86_64-macos', os: 'macos-latest' }
-          - { goos: darwin, goarch: arm64, cgo: 1, zig_target: 'aarch64-macos', os: 'macos-latest' }
+          - { goos: darwin, goarch: amd64, cgo: 1, zig_target: 'x86_64-macos' }
+          - { goos: darwin, goarch: arm64, cgo: 1, zig_target: 'aarch64-macos' }
 
           # Android 平台
-          - { goos: android, goarch: arm, cgo: 1, zig_target: 'arm-linux-androideabi26-clang', api: 26, os: 'ubuntu-latest' }
-          - { goos: android, goarch: arm64, cgo: 1, zig_target: 'aarch64-linux-android26-clang', api: 26, os: 'ubuntu-latest' }
+          - { goos: android, goarch: arm, cgo: 1, zig_target: 'arm-linux-androideabi', api: 26 }
+          - { goos: android, goarch: arm64, cgo: 1, zig_target: 'aarch64-linux-android', api: 26 }
 
     steps:
       - name: Checkout code
@@ -42,11 +42,18 @@ jobs:
           go-version: '1.22'
           cache: true
 
-      # 安装 Zig（统一替代 MinGW / NDK / GCC 等工具链）
+      # 安装 Zig
       - name: Set up Zig
         uses: goto-bus-stop/setup-zig@v2
         with:
           version: '0.13.0'
+
+      # 为 macOS 交叉编译安装 osxcross 和 macOS SDK
+      - name: Set up osxcross for macOS cross-compile
+        if: matrix.goos == 'darwin'
+        uses: mbround18/setup-osxcross@v1
+        with:
+          osx-version: "12.3"
 
       - name: Build Binary
         env:
@@ -65,12 +72,17 @@ jobs:
             EXT=".so"
           fi
 
+          # 为 macOS 目标设置 SDKROOT（osxcross 默认安装路径）
+          if [ "${{ matrix.goos }}" = "darwin" ]; then
+            export SDKROOT="$(pwd)/osxcross/SDK/MacOSX12.3.sdk"
+            echo "SDKROOT set to: $SDKROOT"
+          fi
+
           # 使用 Zig 作为 CC 进行交叉编译
           if [ "${{ matrix.goos }}" = "android" ]; then
-            # Android 需要指定 API 级别
-            export CC="zig cc -target ${{ matrix.zig_target }} -v"
+            export CC="zig cc -target ${{ matrix.zig_target }}${{ matrix.api }} -Wno-unused-command-line-argument"
           else
-            export CC="zig cc -target ${{ matrix.zig_target }} -v"
+            export CC="zig cc -target ${{ matrix.zig_target }} -Wno-unused-command-line-argument"
           fi
 
           echo "Using Zig CC: $CC"
@@ -83,24 +95,19 @@ jobs:
           EXT=""
           if [ "${{ matrix.goos }}" = "windows" ]; then
             EXT=".dll"
-            zip "${NAME}.zip" "${NAME}${EXT}"
           elif [ "${{ matrix.goos }}" = "darwin" ]; then
             EXT=".dylib"
-            zip "${NAME}.zip" "${NAME}${EXT}"
           else
             EXT=".so"
+          fi
+
+          if [ "${{ matrix.goos }}" = "windows" ]; then
+            zip "${NAME}.zip" "${NAME}${EXT}"
+          else
             tar czf "${NAME}.tar.gz" "${NAME}${EXT}"
           fi
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: server-${{ matrix.goos }}-${{ matrix.goarch }}
-          path: server-${{ matrix.goos }}-${{ matrix.goarch }}.*
-
-      - name: Upload to Release
-        uses: softprops/action-gh-release@v2
-        if: startsWith(github.ref, 'refs/tags/')
-        with:
-          files: |
-            server-${{ matrix.goos }}-${{ matrix.goarch }}.*
+          name: server-${{ m
