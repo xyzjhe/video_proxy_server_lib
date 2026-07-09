@@ -19,7 +19,7 @@ jobs:
           # Linux 平台
           - { goos: linux, goarch: amd64, cgo: 1, zig_target: 'x86_64-linux-gnu' }
           - { goos: linux, goarch: arm64, cgo: 1, zig_target: 'aarch64-linux-gnu' }
-          - { goos: linux, goarch: arm, cgo: 1, zig_target: 'arm-linux-gnueabihf' }
+          - { goos: linux, goarch: arm,   cgo: 1, zig_target: 'arm-linux-gnueabihf', goarm: 7 }
 
           # Windows 平台
           - { goos: windows, goarch: amd64, cgo: 1, zig_target: 'x86_64-windows-gnu' }
@@ -29,7 +29,7 @@ jobs:
           - { goos: darwin, goarch: arm64, cgo: 1, zig_target: 'aarch64-macos' }
 
           # Android 平台
-          - { goos: android, goarch: arm, cgo: 1, zig_target: 'arm-linux-androideabi', api: 26 }
+          - { goos: android, goarch: arm,   cgo: 1, zig_target: 'arm-linux-androideabi', api: 26 }
           - { goos: android, goarch: arm64, cgo: 1, zig_target: 'aarch64-linux-android', api: 26 }
 
     steps:
@@ -42,80 +42,82 @@ jobs:
           go-version: '1.22'
           cache: true
 
-      # 安装 Zig
       - name: Set up Zig
         uses: goto-bus-stop/setup-zig@v2
         with:
           version: '0.13.0'
 
-      # 为 macOS 交叉编译安装 osxcross 和 macOS SDK
       - name: Set up osxcross for macOS cross-compile
         if: matrix.goos == 'darwin'
         uses: mbround18/setup-osxcross@v1
         with:
           osx-version: "12.3"
 
+      # 统一构建步骤：编译动态库 + 设置后续步骤所需的环境变量
       - name: Build Binary
         env:
-          GOOS: ${{ matrix.goos }}
+          GOOS:   ${{ matrix.goos }}
           GOARCH: ${{ matrix.goarch }}
           CGO_ENABLED: ${{ matrix.cgo }}
-          GOARM: ${{ matrix.goarm }}
+          GOARM:  ${{ matrix.goarm }}
         run: |
+          # ---------- 1. 确定产物名称与扩展名 ----------
           NAME="server-${{ matrix.goos }}-${{ matrix.goarch }}"
-          EXT=""
-          if [ "${{ matrix.goos }}" = "windows" ]; then
-            EXT=".dll"
-          elif [ "${{ matrix.goos }}" = "darwin" ]; then
-            EXT=".dylib"
-          else
-            EXT=".so"
-          fi
+          case "${{ matrix.goos }}" in
+            windows) EXT=".dll"   ;;
+            darwin)  EXT=".dylib" ;;
+            *)       EXT=".so"    ;;
+          esac
 
-          # 为 macOS 目标设置 SDKROOT（osxcross 默认安装路径）
+          echo "NAME=$NAME" >> $GITHUB_ENV
+          echo "EXT=$EXT"   >> $GITHUB_ENV
+
+          # ---------- 2. macOS SDK 路径 ----------
           if [ "${{ matrix.goos }}" = "darwin" ]; then
-            export SDKROOT="$(pwd)/osxcross/SDK/MacOSX12.3.sdk"
-            echo "SDKROOT set to: $SDKROOT"
+            # 自动查找 osxcross 安装的 SDK（匹配首个 MacOSX*.sdk）
+            SDKROOT="$(ls -d $(pwd)/osxcross/SDK/MacOSX*.sdk | head -1)"
+            echo "SDKROOT=$SDKROOT" >> $GITHUB_ENV
           fi
 
-          # 使用 Zig 作为 CC 进行交叉编译
-          if [ "${{ matrix.goos }}" = "android" ]; then
-            export CC="zig cc -target ${{ matrix.zig_target }}${{ matrix.api }} -Wno-unused-command-line-argument"
-          else
-            export CC="zig cc -target ${{ matrix.zig_target }} -Wno-unused-command-line-argument"
-          fi
+          # ---------- 3. 创建 zig cc wrapper（解决 CC 不能带参数的问题） ----------
+          TARGET="${{ matrix.zig_target }}${{ matrix.api }}"
+          cat > ./zig-cc <<EOF
+          #!/bin/sh
+          zig cc -target ${TARGET} -Wno-unused-command-line-argument "\$@"
+          EOF
+          chmod +x ./zig-cc
+          export CC="$(pwd)/zig-cc"
+          echo "Using Zig CC for target: $TARGET"
 
-          echo "Using Zig CC: $CC"
-
+          # ---------- 4. 执行编译 ----------
           go build -ldflags="-s -w" -buildmode=c-shared -o "${NAME}${EXT}" .
 
+          # ---------- 5. 确定最终要上传的压缩包名称 ----------
+          if [ "${{ matrix.goos }}" = "windows" ]; then
+            ARCHIVE="${NAME}.zip"
+          else
+            ARCHIVE="${NAME}.tar.gz"
+          fi
+          echo "ARCHIVE=$ARCHIVE" >> $GITHUB_ENV
+
+      # 打包产物（使用上一步设置的环境变量）
       - name: Compress Artifacts
         run: |
-          NAME="server-${{ matrix.goos }}-${{ matrix.goarch }}"
-          EXT=""
+          echo "Creating archive: ${{ env.ARCHIVE }}"
           if [ "${{ matrix.goos }}" = "windows" ]; then
-            EXT=".dll"
-          elif [ "${{ matrix.goos }}" = "darwin" ]; then
-            EXT=".dylib"
+            zip "${{ env.ARCHIVE }}" "${{ env.NAME }}${{ env.EXT }}"
           else
-            EXT=".so"
-          fi
-
-          if [ "${{ matrix.goos }}" = "windows" ]; then
-            zip "${NAME}.zip" "${NAME}${EXT}"
-          else
-            tar czf "${NAME}.tar.gz" "${NAME}${EXT}"
+            tar czf "${{ env.ARCHIVE }}" "${{ env.NAME }}${{ env.EXT }}"
           fi
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: server-${{ matrix.goos }}-${{ matrix.goarch }}
-          path: server-${{ matrix.goos }}-${{ matrix.goarch }}.*
+          name: ${{ env.NAME }}
+          path: ${{ env.ARCHIVE }}
 
       - name: Upload to Release
         uses: softprops/action-gh-release@v2
         if: startsWith(github.ref, 'refs/tags/')
         with:
-          files: |
-            server-${{ matrix.goos }}-${{ matrix.goarch }}.*
+          files: ${{ env.ARCHIVE }}
