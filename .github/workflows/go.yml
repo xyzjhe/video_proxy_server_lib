@@ -24,7 +24,7 @@ jobs:
           # Windows 平台
           - { goos: windows, goarch: amd64, cgo: 1, zig_target: 'x86_64-windows-gnu' }
 
-          # macOS 平台（Zig 原生支持，无需 osxcross）
+          # macOS 平台
           - { goos: darwin, goarch: amd64, cgo: 1, zig_target: 'x86_64-macos' }
           - { goos: darwin, goarch: arm64, cgo: 1, zig_target: 'aarch64-macos' }
 
@@ -47,7 +47,6 @@ jobs:
         with:
           version: '0.13.0'
 
-      # ========== 缓存 Go 模块 ==========
       - name: Cache Go modules
         uses: actions/cache@v4
         with:
@@ -56,7 +55,6 @@ jobs:
             ~/.cache/go-build
           key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
 
-      # ========== 统一构建步骤 ==========
       - name: Build Binary
         env:
           GOOS:   ${{ matrix.goos }}
@@ -78,7 +76,6 @@ jobs:
           echo "EXT=$EXT"   >> $GITHUB_ENV
 
           # ---------- 2. 构建 Zig target 字符串 ----------
-          # Android 需要附加 API level，格式为 <target>.<api>
           if [ "${{ matrix.goos }}" = "android" ]; then
             TARGET="${{ matrix.zig_target }}.${{ matrix.api }}"
           else
@@ -86,10 +83,27 @@ jobs:
           fi
 
           # ---------- 3. 创建 zig cc wrapper ----------
-          # 解决 CC 环境变量不能带参数的问题
-          cat > ./zig-cc <<EOF
+          # 关键修复：过滤掉 -arch 参数（Go cgo 在 darwin 平台会传递 -arch xxx，
+          # 但 zig cc 在 Linux 上不识别该参数，会导致 target 被错误覆盖）
+          cat > ./zig-cc <<'EOF'
           #!/bin/sh
-          exec zig cc -target ${TARGET} -Wno-unused-command-line-argument "\$@"
+          # 过滤掉 -arch 及其参数值
+          filtered_args=""
+          skip_next=0
+          for arg in "$@"; do
+            if [ $skip_next -eq 1 ]; then
+              skip_next=0
+              continue
+            fi
+            case "$arg" in
+              -arch)
+                skip_next=1
+                continue
+                ;;
+            esac
+            filtered_args="$filtered_args \"$arg\""
+          done
+          eval exec zig cc -target '${TARGET}' -Wno-unused-command-line-argument $filtered_args
           EOF
           chmod +x ./zig-cc
 
@@ -108,7 +122,6 @@ jobs:
           fi
           echo "ARCHIVE=$ARCHIVE" >> $GITHUB_ENV
 
-      # ========== 产物校验 ==========
       - name: Verify Binary
         run: |
           echo "=== File info ==="
@@ -116,7 +129,6 @@ jobs:
           echo "=== Size ==="
           ls -lh "${{ env.NAME }}${{ env.EXT }}"
 
-      # ========== 打包产物 ==========
       - name: Compress Artifacts
         run: |
           echo "Creating archive: ${{ env.ARCHIVE }}"
@@ -126,14 +138,12 @@ jobs:
             tar czf "${{ env.ARCHIVE }}" "${{ env.NAME }}${{ env.EXT }}"
           fi
 
-      # ========== 上传 Artifact ==========
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: ${{ env.NAME }}
           path: ${{ env.ARCHIVE }}
 
-      # ========== 发布到 GitHub Release ==========
       - name: Upload to Release
         uses: softprops/action-gh-release@v2
         if: startsWith(github.ref, 'refs/tags/')
