@@ -24,7 +24,7 @@ jobs:
           # Windows 平台
           - { goos: windows, goarch: amd64, cgo: 1, zig_target: 'x86_64-windows-gnu' }
 
-          # macOS 平台
+          # macOS 平台（Zig 原生支持，无需 osxcross）
           - { goos: darwin, goarch: amd64, cgo: 1, zig_target: 'x86_64-macos' }
           - { goos: darwin, goarch: arm64, cgo: 1, zig_target: 'aarch64-macos' }
 
@@ -47,13 +47,16 @@ jobs:
         with:
           version: '0.13.0'
 
-      - name: Set up osxcross for macOS cross-compile
-        if: matrix.goos == 'darwin'
-        uses: mbround18/setup-osxcross@v1
+      # ========== 缓存 Go 模块 ==========
+      - name: Cache Go modules
+        uses: actions/cache@v4
         with:
-          osx-version: "12.3"
+          path: |
+            ~/go/pkg/mod
+            ~/.cache/go-build
+          key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
 
-      # 统一构建步骤：编译动态库 + 设置后续步骤所需的环境变量
+      # ========== 统一构建步骤 ==========
       - name: Build Binary
         env:
           GOOS:   ${{ matrix.goos }}
@@ -61,6 +64,8 @@ jobs:
           CGO_ENABLED: ${{ matrix.cgo }}
           GOARM:  ${{ matrix.goarm }}
         run: |
+          set -euo pipefail
+
           # ---------- 1. 确定产物名称与扩展名 ----------
           NAME="server-${{ matrix.goos }}-${{ matrix.goarch }}"
           case "${{ matrix.goos }}" in
@@ -72,34 +77,30 @@ jobs:
           echo "NAME=$NAME" >> $GITHUB_ENV
           echo "EXT=$EXT"   >> $GITHUB_ENV
 
-          # ---------- 2. macOS SDK 路径 ----------
-          if [ "${{ matrix.goos }}" = "darwin" ]; then
-            # 自动查找 osxcross 安装的 SDK（匹配首个 MacOSX*.sdk）
-            SDKROOT="$(ls -d $(pwd)/osxcross/SDK/MacOSX*.sdk | head -1)"
-            echo "SDKROOT=$SDKROOT" >> $GITHUB_ENV
-          fi
-
-          # ---------- 3. 创建 zig cc wrapper（解决 CC 不能带参数的问题） ----------
-          
-            if [ "${{ matrix.goos }}" = "android" ]; then
-            # 注意：Zig 的 Android target 格式为 <abi>.<api>，中间用点号分隔
+          # ---------- 2. 构建 Zig target 字符串 ----------
+          # Android 需要附加 API level，格式为 <target>.<api>
+          if [ "${{ matrix.goos }}" = "android" ]; then
             TARGET="${{ matrix.zig_target }}.${{ matrix.api }}"
           else
             TARGET="${{ matrix.zig_target }}"
           fi
-          
+
+          # ---------- 3. 创建 zig cc wrapper ----------
+          # 解决 CC 环境变量不能带参数的问题
           cat > ./zig-cc <<EOF
           #!/bin/sh
-          zig cc -target ${TARGET} -Wno-unused-command-line-argument "\$@"
+          exec zig cc -target ${TARGET} -Wno-unused-command-line-argument "\$@"
           EOF
           chmod +x ./zig-cc
-          export CC="$(pwd)/zig-cc"
+
+          # 写入 GITHUB_ENV，确保后续步骤也能使用
+          echo "CC=$(pwd)/zig-cc" >> $GITHUB_ENV
           echo "Using Zig CC for target: $TARGET"
 
           # ---------- 4. 执行编译 ----------
           go build -ldflags="-s -w" -buildmode=c-shared -o "${NAME}${EXT}" .
 
-          # ---------- 5. 确定最终要上传的压缩包名称 ----------
+          # ---------- 5. 确定压缩包名称 ----------
           if [ "${{ matrix.goos }}" = "windows" ]; then
             ARCHIVE="${NAME}.zip"
           else
@@ -107,7 +108,15 @@ jobs:
           fi
           echo "ARCHIVE=$ARCHIVE" >> $GITHUB_ENV
 
-      # 打包产物（使用上一步设置的环境变量）
+      # ========== 产物校验 ==========
+      - name: Verify Binary
+        run: |
+          echo "=== File info ==="
+          file "${{ env.NAME }}${{ env.EXT }}"
+          echo "=== Size ==="
+          ls -lh "${{ env.NAME }}${{ env.EXT }}"
+
+      # ========== 打包产物 ==========
       - name: Compress Artifacts
         run: |
           echo "Creating archive: ${{ env.ARCHIVE }}"
@@ -117,12 +126,14 @@ jobs:
             tar czf "${{ env.ARCHIVE }}" "${{ env.NAME }}${{ env.EXT }}"
           fi
 
+      # ========== 上传 Artifact ==========
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: ${{ env.NAME }}
           path: ${{ env.ARCHIVE }}
 
+      # ========== 发布到 GitHub Release ==========
       - name: Upload to Release
         uses: softprops/action-gh-release@v2
         if: startsWith(github.ref, 'refs/tags/')
