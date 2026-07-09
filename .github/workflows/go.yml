@@ -80,7 +80,14 @@ jobs:
           fi
 
           # ---------- 3. 创建 zig cc wrapper（解决 CC 不能带参数的问题） ----------
-          TARGET="${{ matrix.zig_target }}${{ matrix.api }}"
+          
+            if [ "${{ matrix.goos }}" = "android" ]; then
+            # 注意：Zig 的 Android target 格式为 <abi>.<api>，中间用点号分隔
+            TARGET="${{ matrix.zig_target }}.${{ matrix.api }}"
+          else
+            TARGET="${{ matrix.zig_target }}"
+          fi
+          
           cat > ./zig-cc <<EOF
           #!/bin/sh
           zig cc -target ${TARGET} -Wno-unused-command-line-argument "\$@"
