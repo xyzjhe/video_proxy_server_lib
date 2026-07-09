@@ -10,7 +10,8 @@ permissions:
   contents: write
 
 jobs:
-  build:
+  # ==================== 交叉编译：Linux / Windows / Android ====================
+  build-cross:
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -22,11 +23,7 @@ jobs:
           # Windows 平台
           - { goos: windows, goarch: amd64, cgo: 1 }
 
-          # macOS 平台 (使用 osxcross 交叉编译)
-          - { goos: darwin, goarch: amd64, cgo: 1, macosx_deployment_target: '10.13' }
-          - { goos: darwin, goarch: arm64, cgo: 1, macosx_deployment_target: '11.0' }
-
-          # Android 平台 (必须开启 CGO 并配置 NDK)
+          # Android 平台
           - { goos: android, goarch: arm, cgo: 1, ndk_arch: arm-linux-androideabi, api: 26, goarm: 7 }
           - { goos: android, goarch: arm64, cgo: 1, ndk_arch: aarch64-linux-android, api: 26 }
 
@@ -40,35 +37,12 @@ jobs:
           go-version: '1.22'
           cache: true
 
-      # 安装 Windows 交叉编译工具链
       - name: Install MinGW-w64
         if: matrix.goos == 'windows'
         run: |
           sudo apt-get update
-          sudo apt-get install -y \
-            gcc-mingw-w64-x86-64
+          sudo apt-get install -y gcc-mingw-w64-x86-64
 
-      # 安装 macOS 交叉编译工具链 (osxcross)
-      - name: Install osxcross
-        if: matrix.goos == 'darwin'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            clang \
-            cmake \
-            libssl-dev \
-            libxml2-dev \
-            zlib1g-dev
-          # 克隆 osxcross
-          git clone https://github.com/tpoechtrager/osxcross.git /opt/osxcross
-          cd /opt/osxcross
-          # 下载 macOS SDK（这里使用 11.3 SDK，支持 darwin/amd64 和 darwin/arm64）
-          wget -q -O tarballs/MacOSX11.3.sdk.tar.xz \
-            https://github.com/phracker/MacOSX-SDKs/releases/download/11.3/MacOSX11.3.sdk.tar.xz
-          # 构建 osxcross 工具链
-          UNATTENDED=yes ./build.sh
-
-      # 仅在需要 Android NDK 时才安装
       - name: Set up Android NDK
         if: matrix.goos == 'android'
         uses: android-actions/setup-android@v3
@@ -85,24 +59,13 @@ jobs:
           NAME="server-${{ matrix.goos }}-${{ matrix.goarch }}"
           EXT=""
           
-          # 设置 CC 编译器
           if [ "${{ matrix.goos }}" = "windows" ]; then
             EXT=".dll"
             export CC="x86_64-w64-mingw32-gcc"
-          elif [ "${{ matrix.goos }}" = "darwin" ]; then
-            EXT=".dylib"
-            export OSX_CROSS_ROOT="/opt/osxcross"
-            export SDK_PATH="$OSX_CROSS_ROOT/SDK/MacOSX.sdk"
-            export TARGET="${{ matrix.goarch }}-apple-darwin${{ matrix.macosx_deployment_target }}"
-            export CC="$OSX_CROSS_ROOT/target/bin/${{ matrix.goarch }}-apple-darwin${{ matrix.macosx_deployment_target }}-clang"
-            export CXX="$OSX_CROSS_ROOT/target/bin/${{ matrix.goarch }}-apple-darwin${{ matrix.macosx_deployment_target }}-clang++"
-            export CGO_CFLAGS="--sysroot=$SDK_PATH -mmacosx-version-min=${{ matrix.macosx_deployment_target }}"
-            export CGO_LDFLAGS="--sysroot=$SDK_PATH -mmacosx-version-min=${{ matrix.macosx_deployment_target }}"
           else
             EXT=".so"
           fi
           
-          # 如果是 Android 平台，配置 NDK 交叉编译器环境
           if [ "${{ matrix.goos }}" = "android" ]; then
             if [ "${{ matrix.goarch }}" = "arm" ]; then
               export CC="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/armv7a-linux-androideabi${{ matrix.api }}-clang"
@@ -110,12 +73,6 @@ jobs:
               export CC="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/${{ matrix.ndk_arch }}${{ matrix.api }}-clang"
             fi
             echo "Using Android CC: $CC"
-          fi
-          
-          if [ "${{ matrix.goos }}" = "linux" ] && [ "${{ matrix.goarch }}" = "arm64" ]; then
-             export CC="aarch64-linux-gnu-gcc"
-          elif [ "${{ matrix.goos }}" = "linux" ] && [ "${{ matrix.goarch }}" = "arm" ]; then
-              export CC="arm-linux-gnueabihf-gcc"
           fi
           
           go build -ldflags="-s -w" -buildmode=c-shared -o "${NAME}${EXT}" .
@@ -126,8 +83,6 @@ jobs:
           EXT=""
           if [ "${{ matrix.goos }}" = "windows" ]; then
             EXT=".dll"
-          elif [ "${{ matrix.goos }}" = "darwin" ]; then
-            EXT=".dylib"
           else
             EXT=".so"
           fi
@@ -144,9 +99,61 @@ jobs:
           name: server-${{ matrix.goos }}-${{ matrix.goarch }}
           path: server-${{ matrix.goos }}-${{ matrix.goarch }}.*
 
+  # ==================== 原生编译：macOS (darwin) ====================
+  build-darwin:
+    runs-on: macos-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { goos: darwin, goarch: amd64, cgo: 1 }
+          - { goos: darwin, goarch: arm64, cgo: 1 }
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+          cache: true
+
+      - name: Build Binary
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: ${{ matrix.cgo }}
+        run: |
+          NAME="server-${{ matrix.goos }}-${{ matrix.goarch }}"
+          EXT=".dylib"
+          
+          # macOS 原生环境，CC 默认就是 clang，无需额外配置
+          go build -ldflags="-s -w" -buildmode=c-shared -o "${NAME}${EXT}" .
+
+      - name: Compress Artifacts
+        run: |
+          NAME="server-${{ matrix.goos }}-${{ matrix.goarch }}"
+          tar czf "${NAME}.tar.gz" "${NAME}.dylib"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: server-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: server-${{ matrix.goos }}-${{ matrix.goarch }}.*
+
+  # ==================== 发布 Release ====================
+  release:
+    needs: [build-cross, build-darwin]
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/')
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
       - name: Upload to Release
         uses: softprops/action-gh-release@v2
-        if: startsWith(github.ref, 'refs/tags/')
         with:
-          files: |
-            server-${{ matrix.goos }}-${{ matrix.goarch }}.*
+          files: artifacts/**/*
